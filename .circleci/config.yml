@@ -71,6 +71,15 @@ commands:
             export GRADLE_OPTS="-Xmx2g -Dorg.gradle.jvmargs=-Xmx2g"
             # Run compile/unit tests, skipping integration tests
             ./gradlew --no-daemon --max-workers=2 --stacktrace clean assemble check -x cassandra-analytics-integration-tests:test -Dcassandra.analytics.bridges.sstable_format=<<parameters.sstable_format>>
+          # DataTypeTests is @Tag("Sequential"), so it is excluded from CORE_MAX_PARALLEL_FORKS and runs
+          # single-threaded. Its property-based cases, e.g. testMap with 50 generated type pairs, each write and
+          # read back a real SSTable and emit no console output in between, so a single method can exceed the 10m
+          # default silence budget and be killed despite passing. run_integration below sets its own budget.
+          #
+          # testMap is the worst case: 50 type pairs x 3 sstable counts [1,2,5] x 2 partitioners = 300
+          # write-then-read cycles for the one CASSANDRA_VERSION this job pins. This caps silence, not total
+          # runtime, so an over-estimate costs nothing while an under-estimate fails a passing build.
+          no_output_timeout: 45m
 
   run_integration:
     parameters:
