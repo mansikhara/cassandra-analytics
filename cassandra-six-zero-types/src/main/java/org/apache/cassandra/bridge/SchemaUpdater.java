@@ -72,6 +72,27 @@ public class SchemaUpdater
         ClusterMetadata.current().schema.initializeKeyspaceInstances(DistributedSchema.empty(), false);
     }
 
+    /**
+     * Creates the keyspace instance for one keyspace, leaving every other keyspace's instance untouched.
+     *
+     * <p>Prefer this to {@link #openKeyspaceInstances()} whenever the caller knows which keyspace is missing its
+     * instance. That method diffs against {@link DistributedSchema#empty()}, so every keyspace in the process looks
+     * newly created and all of them are rebuilt. Rebuilding a keyspace that already has an instance constructs its
+     * {@code KeyspaceMetrics} again, and each metric it re-registers throws {@code IllegalArgumentException} out of
+     * Dropwizard's {@code MetricRegistry.register}. Filling in those stack traces dominates the cost, and the cost
+     * grows with the number of keyspaces the process has seen, so a long-lived JVM that builds schemas repeatedly -
+     * a Spark executor, or a single test class - degrades quadratically.
+     *
+     * <p>Diffing against the current keyspaces minus this one leaves exactly one keyspace in
+     * {@code Keyspaces.diff().created}, so one instance is built and no metric is registered twice.
+     */
+    public static void openKeyspaceInstance(String keyspaceName)
+    {
+        DistributedSchema current = ClusterMetadata.current().schema;
+        DistributedSchema before = new DistributedSchema(current.getKeyspaces().without(keyspaceName));
+        current.initializeKeyspaceInstances(before, false);
+    }
+
     public static void load(SchemaProvider schema, KeyspaceMetadata keyspaceMetadata)
     {
         submit(schema, SchemaTransformations.addKeyspace(keyspaceMetadata, false));
