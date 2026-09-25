@@ -60,31 +60,21 @@ public class SchemaUpdater
     }
 
     /**
-     * Creates a keyspace instance for every keyspace of the current cluster metadata. Use this only when a
-     * keyspace has metadata but no instance, which happens when code outside this class commits it; Cassandra
-     * 6.0's {@code Keyspace.openWithoutSSTables} only reads the instance and no longer creates it.
+     * Creates the keyspace instance for one keyspace, leaving every other keyspace's instance untouched. Use this
+     * when a keyspace has metadata but no instance, which happens when code outside this class commits it;
+     * Cassandra 6.0's {@code Keyspace.openWithoutSSTables} only reads the instance and no longer creates it.
      *
-     * <p>Passing an empty previous schema replaces every existing instance, dropping the column family stores
-     * it held, so prefer {@link #submit}, which keeps the instances of each commit.
-     */
-    public static void openKeyspaceInstances()
-    {
-        ClusterMetadata.current().schema.initializeKeyspaceInstances(DistributedSchema.empty(), false);
-    }
-
-    /**
-     * Creates the keyspace instance for one keyspace, leaving every other keyspace's instance untouched.
-     *
-     * <p>Prefer this to {@link #openKeyspaceInstances()} whenever the caller knows which keyspace is missing its
-     * instance. That method diffs against {@link DistributedSchema#empty()}, so every keyspace in the process looks
-     * newly created and all of them are rebuilt. Rebuilding a keyspace that already has an instance constructs its
-     * {@code KeyspaceMetrics} again, and each metric it re-registers throws {@code IllegalArgumentException} out of
-     * Dropwizard's {@code MetricRegistry.register}. Filling in those stack traces dominates the cost, and the cost
-     * grows with the number of keyspaces the process has seen, so a long-lived JVM that builds schemas repeatedly -
-     * a Spark executor, or a single test class - degrades quadratically.
+     * <p>Prefer this to diffing against {@link DistributedSchema#empty()}, which makes every keyspace look newly
+     * created and rebuilds them all. Rebuilding a keyspace that already has an instance constructs its
+     * {@code KeyspaceMetrics} again, and each metric it re-registers makes Dropwizard's
+     * {@code MetricRegistry.register} throw {@code IllegalArgumentException}; filling in those stack traces is the
+     * real cost, and it scales with the number of keyspaces the process has seen. A bulk job builds schema once per
+     * keyspace and uses one keyspace, so this does not affect production. It is visible in tests, which open many
+     * distinct keyspaces in a single JVM.
      *
      * <p>Diffing against the current keyspaces minus this one leaves exactly one keyspace in
-     * {@code Keyspaces.diff().created}, so one instance is built and no metric is registered twice.
+     * {@code Keyspaces.diff().created}, so one instance is built and no metric is registered twice. That also keeps
+     * the keyspace out of {@code diff().altered}, which is what {@link #removeTables} needs - see its javadoc.
      */
     public static void openKeyspaceInstance(String keyspaceName)
     {
@@ -116,13 +106,13 @@ public class SchemaUpdater
      * transformation of its own. {@link #submit} is also the wrong follow-up here: it reports the table in
      * {@code Keyspaces.diff().altered}, which makes {@code DistributedSchema.initializeKeyspaceInstances} call
      * {@code Keyspace.dropCf} and so initialize {@code CompactionManager}, which throws in client mode where
-     * concurrent_compactors is zero. Rebuild the instances from the committed metadata instead, which leaves the
+     * concurrent_compactors is zero. Rebuild the instance from the committed metadata instead, which leaves the
      * removed table without a column family store and touches no compaction machinery.
      */
     public static void removeTables(SchemaProvider schema, KeyspaceMetadata keyspaceMetadata)
     {
         schema.submit(replace(keyspaceMetadata));
-        openKeyspaceInstances();
+        openKeyspaceInstance(keyspaceMetadata.name);
     }
 
     public static void updateTable(SchemaProvider schema, KeyspaceMetadata keyspaceMetadata, TableMetadata tableMetadata)
